@@ -57,6 +57,35 @@ export class MapViewManager {
     }
 
     /**
+     * Zoom at a specific pixel point (cursor-relative zoom)
+     * @param {number} zoomDelta - Amount to zoom
+     * @param {number} pixelX - Cursor X position (screen coordinates)
+     * @param {number} pixelY - Cursor Y position (screen coordinates)
+     */
+    zoomAtPoint(zoomDelta, pixelX, pixelY) {
+        // Get the cursor position in map coordinates before zoom
+        const beforeZoomLatLon = this.pixelToLatLon(pixelX, pixelY);
+
+        // Apply zoom
+        const oldZoom = this.zoomLevel;
+        this.setZoom(this.zoomLevel + zoomDelta);
+
+        // Get the cursor position in map coordinates after zoom
+        const afterZoomLatLon = this.pixelToLatLon(pixelX, pixelY);
+
+        // Calculate the difference and adjust center to keep cursor at same position
+        const latDiff = afterZoomLatLon.lat - beforeZoomLatLon.lat;
+        const lonDiff = afterZoomLatLon.lon - beforeZoomLatLon.lon;
+
+        this.centerLat = this.centerLat - latDiff;
+        this.centerLon = this.centerLon - lonDiff;
+
+        // Clamp center within valid bounds
+        this.centerLat = Math.max(-85, Math.min(85, this.centerLat));
+        this.centerLon = ((this.centerLon + 180) % 360) - 180;
+    }
+
+    /**
      * Set center position
      */
     setCenter(lat, lon) {
@@ -68,21 +97,34 @@ export class MapViewManager {
      * Pan by pixel offset
      */
     panByPixels(deltaPixelX, deltaPixelY) {
-        // Convert pixels to tiles
-        const deltaTileX = deltaPixelX / this.tileSize;
-        const deltaTileY = deltaPixelY / this.tileSize;
+        // Convert pixels to map coordinates
+        // At zoom level, calculate how much each pixel represents
+        const zoomLevel = Math.round(this.zoomLevel);
+        
+        // Get the scale factor: how many tile units per pixel at this zoom
+        // Each tile is 256 pixels and covers 360/2^zoom degrees in longitude
+        const numTiles = Math.pow(2, zoomLevel);
+        const degreesPerTile = 360 / numTiles;
+        const degreesPerPixel = degreesPerTile / 256;
 
-        // Convert center to tile coordinates
-        const centerTileX = this.coordinateTransform.latlon_to_tile_x(this.centerLon, this.zoomLevel);
-        const centerTileY = this.coordinateTransform.latlon_to_tile_y(this.centerLat, this.zoomLevel);
+        // Convert pixel delta to degree delta
+        // Positive deltaPixelX (drag right) moves center right (positive longitude)
+        const lonDelta = deltaPixelX * degreesPerPixel;
+        
+        // For latitude, it's more complex due to Web Mercator projection
+        // But we can approximate: at the equator, lon and lat have same degree-to-pixel ratio
+        // Adjusted for latitude: varies with cos(lat)
+        const latRadians = (this.centerLat * Math.PI) / 180;
+        const latDegreesPerPixel = degreesPerPixel / Math.cos(latRadians);
+        const latDelta = -deltaPixelY * latDegreesPerPixel; // Negative because Y is inverted in screens
 
-        // Update tile coordinates
-        const newTileX = centerTileX - deltaTileX;
-        const newTileY = centerTileY - deltaTileY;
+        // Update center position
+        this.centerLon = this.centerLon + lonDelta;
+        this.centerLat = this.centerLat + latDelta;
 
-        // Convert back to lat/lon
-        const latlon = this.tileToLatLon(newTileX, newTileY);
-        this.setCenter(latlon.lat, latlon.lon);
+        // Clamp within valid bounds
+        this.centerLat = Math.max(-85, Math.min(85, this.centerLat));
+        this.centerLon = ((this.centerLon + 180) % 360) - 180;
     }
 
     /**
@@ -109,11 +151,13 @@ export class MapViewManager {
      * Get tiles needed for current viewport
      */
     getVisibleTiles() {
-        const numTiles = Math.pow(2, this.zoomLevel);
+        // Use integer zoom level for tile calculations
+        const zoomLevel = Math.round(this.zoomLevel);
+        const numTiles = Math.pow(2, zoomLevel);
 
         // Convert center to tile coordinates
-        const centerTileX = this.coordinateTransform.latlon_to_tile_x(this.centerLon, this.zoomLevel);
-        const centerTileY = this.coordinateTransform.latlon_to_tile_y(this.centerLat, this.zoomLevel);
+        const centerTileX = this.coordinateTransform.latlon_to_tile_x(this.centerLon, zoomLevel);
+        const centerTileY = this.coordinateTransform.latlon_to_tile_y(this.centerLat, zoomLevel);
 
         // How many tiles fit in viewport (with buffer)
         const tilesAcrossX = Math.ceil(this.canvasWidth / this.tileSize) + 2;
@@ -134,7 +178,7 @@ export class MapViewManager {
                 }
 
                 tiles.push({
-                    z: this.zoomLevel,
+                    z: zoomLevel,
                     x: wrappedX,
                     y: y,
                 });
@@ -162,8 +206,9 @@ export class MapViewManager {
      * Convert screen pixel to lat/lon
      */
     pixelToLatLon(pixelX, pixelY) {
-        const centerTileX = this.coordinateTransform.latlon_to_tile_x(this.centerLon, this.zoomLevel);
-        const centerTileY = this.coordinateTransform.latlon_to_tile_y(this.centerLat, this.zoomLevel);
+        const zoomLevel = Math.round(this.zoomLevel);
+        const centerTileX = this.coordinateTransform.latlon_to_tile_x(this.centerLon, zoomLevel);
+        const centerTileY = this.coordinateTransform.latlon_to_tile_y(this.centerLat, zoomLevel);
 
         // Offset from center
         const offsetX = pixelX - this.canvasWidth / 2;
@@ -181,7 +226,8 @@ export class MapViewManager {
      * Convert tile coordinates to lat/lon
      */
     tileToLatLon(tileX, tileY) {
-        const n = Math.pow(2.0, this.zoomLevel);
+        const zoomLevel = Math.round(this.zoomLevel);
+        const n = Math.pow(2.0, zoomLevel);
 
         // Longitude
         const lon = (tileX / n) * 360.0 - 180.0;
@@ -202,5 +248,17 @@ export class MapViewManager {
             center: { lat: this.centerLat, lon: this.centerLon },
             visibleTiles: this.getVisibleTiles().length,
         };
+    }
+
+    /**
+     * Log current map state for debugging
+     */
+    logState() {
+        const state = this.getState();
+        console.log(`🗺️ Map State:
+  Zoom: ${state.zoom.toFixed(2)}
+  Center: ${state.center.lat.toFixed(4)}°, ${state.center.lon.toFixed(4)}°
+  Visible Tiles: ${state.visibleTiles}
+  Zoom constraints: ${this.minZoom}-${this.maxZoom}`);
     }
 }

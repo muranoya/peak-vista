@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Peak Vista - 3D Terrain Viewer</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="./styles/main.css">
 </head>
 <body>
@@ -36,9 +38,16 @@
                 <div id="status" class="status-box">Ready</div>
             </div>
         </div>
-        <canvas id="canvas"></canvas>
+        <!-- Leaflet map container for map mode -->
+        <div id="map-container" class="view-container map-view"></div>
+        <!-- Three.js canvas for 3D terrain mode -->
+        <canvas id="canvas" class="view-container canvas-view"></canvas>
     </div>
 
+    <!-- Three.js JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script type="module" src="./js/main.js"></script>
 </body>
 </html>

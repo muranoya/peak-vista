@@ -5,8 +5,8 @@ import { TerrainViewManager } from './terrain-view.js';
 import { UIController } from './ui-controller.js';
 import { PerformanceMonitor } from './performance-monitor.js';
 import { DeviceDetector } from './device-detector.js';
-import { MapViewManager } from './map-view.js';
-import { MapRenderer } from './map-renderer.js';
+import { MapViewManager } from './map-view-leaflet.js';
+import { MapRenderer } from './map-renderer-leaflet.js';
 import { ElevationLookup } from './elevation-lookup.js';
 import { ViewModeManager, VIEW_MODE } from './view-mode-manager.js';
 
@@ -25,9 +25,12 @@ class PeakVistaApp {
         this.optimizationProfile = this.deviceDetector.getOptimizationProfile();
 
         this.canvas = document.getElementById('canvas');
+        this.mapContainer = document.getElementById('map-container');
 
-        // Initialize renderers
+        // Initialize renderers - ensure canvas is temporarily visible for Three.js initialization
+        this.canvas.classList.add('active');
         this.terrainRenderer = new TerrainRenderer(this.canvas);
+        this.canvas.classList.remove('active');
         this.mapRenderer = null; // Will be initialized later
 
         // Networking and caching
@@ -102,8 +105,13 @@ class PeakVistaApp {
 
             // Initialize map view and renderer
             this.updateStatus('Initializing map view...', 'loading');
-            this.mapView = new MapViewManager(CoordinateTransform);
-            this.mapRenderer = new MapRenderer(this.canvas, this.mapView);
+            this.mapRenderer = new MapRenderer(this.mapContainer);
+            this.mapView = new MapViewManager(this.mapRenderer);
+
+            // Register map click callback
+            this.mapRenderer.onMapClick((lat, lon) => {
+                this.handleMapClick(lat, lon);
+            });
 
             // Initialize elevation lookup
             this.elevationLookup = new ElevationLookup(
@@ -134,8 +142,7 @@ class PeakVistaApp {
     }
 
     setupEventListeners() {
-        // Basic form submission - now handled by UIController
-        // Keep this for backward compatibility
+        // Form submission
         this.locationForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const lat = parseFloat(document.getElementById('lat-input').value);
@@ -146,69 +153,14 @@ class PeakVistaApp {
             this.loadView(lat, lon, angle, distance);
         });
 
-        // Map canvas click handling
-        this.canvas.addEventListener('click', (e) => {
-            if (this.viewModeManager && this.viewModeManager.isMapMode()) {
-                this.handleMapClick(e);
-            }
-        });
-
-        // Map canvas mouse wheel for zoom
-        this.canvas.addEventListener('wheel', (e) => {
-            if (this.viewModeManager && this.viewModeManager.isMapMode()) {
-                e.preventDefault();
-                e.stopPropagation();
-                this.handleMapZoom(e);
-            }
-        }, { passive: false });
-
-        // Map canvas drag for pan
-        let isPanning = false;
-        let panLastX = 0;
-        let panLastY = 0;
-
-        this.canvas.addEventListener('mousedown', (e) => {
-            if (this.viewModeManager && this.viewModeManager.isMapMode()) {
-                isPanning = true;
-                panLastX = e.clientX;
-                panLastY = e.clientY;
-                e.preventDefault();
-            }
-        });
-
-        this.canvas.addEventListener('mousemove', (e) => {
-            if (this.viewModeManager && this.viewModeManager.isMapMode() && isPanning) {
-                const deltaX = e.clientX - panLastX;
-                const deltaY = e.clientY - panLastY;
-
-                // Pan the map in the opposite direction (user drags right = map moves left)
-                if (this.mapView) {
-                    this.mapView.panByPixels(deltaX, deltaY);
-                }
-
-                panLastX = e.clientX;
-                panLastY = e.clientY;
-                e.preventDefault();
-            }
-        });
-
-        document.addEventListener('mouseup', () => {
-            isPanning = false;
-        });
+        // Map click handling will be registered after mapRenderer is initialized
     }
 
     /**
      * Handle map click - load 3D view at clicked location
      */
-    async handleMapClick(event) {
+    async handleMapClick(lat, lon) {
         if (!this.mapRenderer) return;
-
-        const rect = this.canvas.getBoundingClientRect();
-        const pixelX = event.clientX - rect.left;
-        const pixelY = event.clientY - rect.top;
-
-        // Get lat/lon at click point
-        const { lat, lon } = this.mapRenderer.getTileAtPixel(pixelX, pixelY);
 
         console.log(`Map clicked at ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`);
 
@@ -236,35 +188,39 @@ class PeakVistaApp {
     }
 
     /**
-     * Handle map zoom
-     */
-    handleMapZoom(event) {
-        // Use smaller increments for smoother zoom
-        const zoomDelta = event.deltaY > 0 ? -0.5 : 0.5;
-        this.mapView.changeZoom(zoomDelta);
-
-        // Log for debugging
-        console.log(`Zoom level: ${this.mapView.zoomLevel.toFixed(2)}`);
-    }
-
-    /**
      * Update UI based on view mode
      */
     updateUIForMode(mode) {
         if (mode === VIEW_MODE.MAP) {
-            // Hide 3D controls, show map hint
+            // Show map, hide canvas and controls
+            this.mapContainer.classList.remove('hidden');
+            this.canvas.classList.remove('active');
             const controlsDiv = document.getElementById('controls');
             if (controlsDiv) {
                 controlsDiv.style.display = 'none';
             }
             this.updateStatus('Map view active. Scroll to zoom, drag to pan, click to view terrain.', 'info');
+            // Trigger Leaflet to invalidate size after showing the container
+            setTimeout(() => {
+                if (this.mapRenderer && this.mapRenderer.map) {
+                    this.mapRenderer.map.invalidateSize();
+                }
+            }, 50);
         } else if (mode === VIEW_MODE.TERRAIN) {
-            // Show 3D controls
+            // Show canvas and controls, hide map
+            this.mapContainer.classList.add('hidden');
+            this.canvas.classList.add('active');
             const controlsDiv = document.getElementById('controls');
             if (controlsDiv) {
                 controlsDiv.style.display = 'block';
             }
             this.updateStatus('3D view active. Click and drag to rotate, scroll to zoom.', 'info');
+            // Resize the Three.js renderer after showing the canvas
+            setTimeout(() => {
+                if (this.terrainRenderer) {
+                    this.terrainRenderer.onWindowResize();
+                }
+            }, 50);
         }
     }
 
@@ -479,6 +435,17 @@ class PeakVistaApp {
 
         // Auto-scroll to bottom
         this.statusDiv.scrollTop = this.statusDiv.scrollHeight;
+    }
+
+    /**
+     * Log current map state for debugging panning
+     */
+    logMapState() {
+        if (this.mapView) {
+            this.mapView.logState();
+        } else {
+            console.warn('Map view not initialized yet');
+        }
     }
 
     start() {
