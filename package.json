@@ -1,0 +1,18 @@
+{
+  "name": "peak-vista",
+  "version": "0.1.0",
+  "description": "3D terrain viewer using GSI elevation map data",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run build:wasm && vite build",
+    "build:wasm": "cd rust && wasm-pack build --target web --out-dir ../src/wasm",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
