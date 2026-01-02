@@ -104,11 +104,6 @@ export class TerrainRenderer {
             // Get normal data from WASM
             const normalsArray = meshData.get_normals();
             geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normalsArray), 3));
-            
-            // Recompute normals to ensure they point in the correct direction for terrain
-            // This is critical for proper lighting and back-face culling
-            geometry.computeVertexNormals();
-            geometry.normalizeNormals();
 
             // Compute bounds to ensure proper geometry size
             geometry.computeBoundingBox();
@@ -153,6 +148,12 @@ export class TerrainRenderer {
             // This is necessary due to floating-point precision in mesh generation
             const overlap = 1.002;
             mesh.scale.set(overlap, 1, overlap);
+            
+            // CRITICAL: Recompute normals after scaling to ensure proper lighting
+            // Non-uniform scaling affects normal vectors, so we must recalculate them
+            // using the inverse transpose of the scaling matrix
+            geometry.computeVertexNormals();
+            geometry.normalizeNormals();
 
             console.log(
                 `Mesh positioned at (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z}), scaled=${overlap.toFixed(4)}`

@@ -130,6 +130,8 @@ impl MeshGenerator {
         }
 
         // Generate indices (simple triangle strip)
+        // IMPORTANT: Winding order must be counter-clockwise when viewed from above
+        // to ensure normals point outward (upward for terrain)
         for y in 0..(grid_size - 1) {
             for x in 0..(grid_size - 1) {
                 let idx0 = y * grid_size + x;
@@ -137,15 +139,15 @@ impl MeshGenerator {
                 let idx2 = (y + 1) * grid_size + x;
                 let idx3 = (y + 1) * grid_size + (x + 1);
 
-                // First triangle (0, 1, 2)
+                // First triangle (counter-clockwise: 0, 2, 1)
                 indices.push(idx0 as u32);
-                indices.push(idx1 as u32);
                 indices.push(idx2 as u32);
+                indices.push(idx1 as u32);
 
-                // Second triangle (1, 3, 2)
+                // Second triangle (counter-clockwise: 1, 2, 3)
                 indices.push(idx1 as u32);
-                indices.push(idx3 as u32);
                 indices.push(idx2 as u32);
+                indices.push(idx3 as u32);
             }
         }
 
