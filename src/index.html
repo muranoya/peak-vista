@@ -42,6 +42,18 @@
         <div id="map-container" class="view-container map-view"></div>
         <!-- Three.js canvas for 3D terrain mode -->
         <canvas id="canvas" class="view-container canvas-view"></canvas>
+
+        <!-- Minimap overlay (3D view only) -->
+        <div id="minimap" class="minimap-overlay">
+            <!-- Leaflet map will be inserted here -->
+            <!-- Compass directions -->
+            <div class="minimap-compass">
+                <span class="compass-n">N</span>
+                <span class="compass-s">S</span>
+                <span class="compass-e">E</span>
+                <span class="compass-w">W</span>
+            </div>
+        </div>
     </div>
 
     <!-- Three.js JS -->

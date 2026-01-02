@@ -81,14 +81,15 @@ export class DeviceDetector {
      */
     getOptimizationProfile() {
         // Determine profile based on device capabilities
+        // OPTIMIZATION: useBalancedLighting = false (default) for maximum performance
+        // Set to true for balanced mode with moderate shadow quality
         const profile = {
             maxTiles: 150,  // Large number for 360-degree terrain coverage
             maxLodLevel: 2,
             renderDistance: 10, // km
             targetFPS: 60,
             pixelRatio: Math.min(this.pixelRatio, 2), // Cap at 2x
-            enableShadows: true,
-            enableAmbientOcclusion: true,
+            useBalancedLighting: false,  // OPTIMIZATION: Default to maximum performance
         };
 
         // Mobile optimization

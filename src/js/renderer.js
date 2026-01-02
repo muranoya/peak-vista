@@ -2,8 +2,9 @@ import * as THREE from 'three';
 import { CameraController } from './camera-controller.js';
 
 export class TerrainRenderer {
-    constructor(canvasElement) {
+    constructor(canvasElement, optimizationProfile = null) {
         this.canvas = canvasElement;
+        this.optimizationProfile = optimizationProfile || { useBalancedLighting: false };
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(
             60,
@@ -39,23 +40,34 @@ export class TerrainRenderer {
     }
 
     setupLighting() {
-        // Directional light (sun)
-        const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
-        sunLight.position.set(1, 2, 1);
-        sunLight.castShadow = true;
-        sunLight.shadow.mapSize.width = 2048;
-        sunLight.shadow.mapSize.height = 2048;
-        this.scene.add(sunLight);
+        if (this.optimizationProfile.useBalancedLighting) {
+            // BALANCED MODE: Moderate shadow quality with reasonable performance
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            sunLight.position.set(1, 2, 1);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 1024;  // Reduced from 2048
+            sunLight.shadow.mapSize.height = 1024; // Reduced from 2048
+            sunLight.shadow.camera.far = 10000;
+            this.scene.add(sunLight);
 
-        // Ambient light
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-        this.scene.add(ambientLight);
+            // Ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            this.scene.add(ambientLight);
 
-        // Hemisphere light
-        const hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x654321, 0.5);
-        this.scene.add(hemisphereLight);
+            this.sunLight = sunLight;
+        } else {
+            // MAXIMUM PERFORMANCE MODE (Default): Minimal lighting, no shadows
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            sunLight.position.set(1, 2, 1);
+            sunLight.castShadow = false;  // OPTIMIZATION: Disable shadow casting
+            this.scene.add(sunLight);
 
-        this.sunLight = sunLight;
+            // Ambient light - increased intensity to compensate for no shadows
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            this.scene.add(ambientLight);
+
+            this.sunLight = sunLight;
+        }
     }
 
     setupCamera() {
@@ -66,6 +78,8 @@ export class TerrainRenderer {
     setupControls() {
         // Initialize enhanced camera controller
         this.cameraController = new CameraController(this.camera, this.canvas);
+        // Pass scene to camera controller for raycasting
+        this.cameraController.setScene(this.scene);
     }
 
     onWindowResize() {
@@ -118,9 +132,10 @@ export class TerrainRenderer {
             const indexCount = geometry.index.count;
             const triangleCount = indexCount / 3;
             
-            console.log(
-                `Geometry ${key}: vertices=${vertexCount}, triangles=${triangleCount}, bounds=${geomWidth.toFixed(1)}x${geomDepth.toFixed(1)}m`
-            );
+            // Debug logging (disabled by default to avoid console spam)
+            // console.log(
+            //     `Geometry ${key}: vertices=${vertexCount}, triangles=${triangleCount}, bounds=${geomWidth.toFixed(1)}x${geomDepth.toFixed(1)}m`
+            // );
 
             // Create material with proper culling and shading
             const material = new THREE.MeshStandardMaterial({
@@ -136,18 +151,13 @@ export class TerrainRenderer {
 
             // Create mesh
             const mesh = new THREE.Mesh(geometry, material);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
+            mesh.castShadow = false;  // OPTIMIZATION: Disable shadow casting
+            mesh.receiveShadow = false; // OPTIMIZATION: Disable shadow receiving
 
             // Position mesh in world space
             const tileSize = 1000; // meters per tile
             mesh.position.x = x * tileSize;
             mesh.position.z = y * tileSize;
-            
-            // Apply minimal overlap (0.2%) to eliminate gaps between tiles
-            // This is necessary due to floating-point precision in mesh generation
-            const overlap = 1.002;
-            mesh.scale.set(overlap, 1, overlap);
             
             // CRITICAL: Recompute normals after scaling to ensure proper lighting
             // Non-uniform scaling affects normal vectors, so we must recalculate them
@@ -155,18 +165,15 @@ export class TerrainRenderer {
             geometry.computeVertexNormals();
             geometry.normalizeNormals();
 
-            console.log(
-                `Mesh positioned at (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z}), scaled=${overlap.toFixed(4)}`
-            );
-            console.log(`Scene children before add: ${this.scene.children.length}`);
+            // Debug logging (disabled by default to avoid console spam)
+            // console.log(
+            //     `Mesh positioned at (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`
+            // );
 
             // Add to scene with proper z-order to avoid z-fighting
             mesh.renderOrder = z;
             this.scene.add(mesh);
             this.tileMeshes.set(key, mesh);
-
-            console.log(`Scene children after add: ${this.scene.children.length}`);
-            console.log(`Tile meshes stored: ${this.tileMeshes.size}`);
 
             return true;
         } catch (error) {
@@ -274,6 +281,10 @@ export class TerrainRenderer {
     animate(callback) {
         const loop = () => {
             requestAnimationFrame(loop);
+            // Update camera movement based on pressed keys (WASD)
+            if (this.cameraController) {
+                this.cameraController.updateMovement();
+            }
             if (callback) callback();
             this.render();
         };
@@ -282,9 +293,9 @@ export class TerrainRenderer {
 
     setCameraPosition(x, y, z, targetX = 0, targetY = 0, targetZ = 0) {
         // Set camera position
-        console.log(
-            `Setting camera position: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
-        );
+        // console.log(
+        //     `Setting camera position: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
+        // );
         this.camera.position.set(x, y, z);
         
         // Sync CameraController with the new camera position
@@ -308,15 +319,17 @@ export class TerrainRenderer {
                 
                 this.cameraController.setViewDirection(yaw, pitch);
                 
-                console.log(
-                    `CameraController synced: position=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}), yaw=${yaw.toFixed(3)}, pitch=${pitch.toFixed(3)}`
-                );
+                // Debug logging (disabled to avoid console spam)
+                // console.log(
+                //     `CameraController synced: position=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}), yaw=${yaw.toFixed(3)}, pitch=${pitch.toFixed(3)}`
+                // );
             } else {
                 // Use default view direction if target is too close
                 this.cameraController.resetCamera();
-                console.log(
-                    `CameraController reset: position=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
-                );
+                // Debug logging (disabled to avoid console spam)
+                // console.log(
+                //     `CameraController reset: position=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
+                // );
             }
         }
     }

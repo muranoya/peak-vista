@@ -108,19 +108,25 @@ impl MeshGenerator {
         let mut normals = Vec::new();
 
         // Create heightmap grid
-        let grid_size = 256 / step;
+        // Note: grid_size includes the edge vertices to ensure full tile coverage
+        // to prevent gaps between adjacent tiles
+        let grid_size = (256 / step) + 1;
         let pixel_size = tile_size / 256.0;
 
         // Generate vertices
         for y in 0..grid_size {
             for x in 0..grid_size {
-                let px = (x * step) as f32;
-                let py = (y * step) as f32;
+                // Clamp to 255 to ensure we don't go beyond the heightmap
+                let sample_x = (x * step).min(255);
+                let sample_y = (y * step).min(255);
+
+                let px = sample_x as f32;
+                let py = sample_y as f32;
 
                 let world_x = px * pixel_size - tile_size / 2.0;
                 let world_z = py * pixel_size - tile_size / 2.0;
 
-                let elevation_idx = (y * step * 256 + x * step) as usize;
+                let elevation_idx = (sample_y * 256 + sample_x) as usize;
                 let world_y = elevations[elevation_idx];
 
                 vertices.push(world_x);

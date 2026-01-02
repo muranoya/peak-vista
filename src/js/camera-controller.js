@@ -24,10 +24,20 @@ export class CameraController {
         
         // Control sensitivity
         this.rotateSensitivity = 0.005;
+        this.movementSpeed = 10; // meters per frame
+        this.eyeHeight = 1.7;    // meters above terrain
 
         // Mouse state
         this.isDragging = false;
         this.previousMousePosition = { x: 0, y: 0 };
+
+        // Keyboard state for WASD movement
+        this.keysPressed = {
+            w: false, // Forward
+            a: false, // Left
+            s: false, // Backward
+            d: false, // Right
+        };
 
         // Animation (for future use if needed)
         this.isAnimating = false;
@@ -42,6 +52,10 @@ export class CameraController {
         this.lastReportedPitch = this.viewDirection.pitch;
         this.viewChangeThreshold = 0.05; // radians (~3 degrees)
 
+        // Raycaster for terrain height detection
+        this.raycaster = null;
+        this.scene = null;
+
         this.setupEventListeners();
         this.updateCameraPosition();
     }
@@ -55,6 +69,7 @@ export class CameraController {
 
         // Keyboard controls
         document.addEventListener('keydown', (e) => this.onKeyDown(e));
+        document.addEventListener('keyup', (e) => this.onKeyUp(e));
     }
 
     onMouseDown(event) {
@@ -96,33 +111,166 @@ export class CameraController {
         if (this.isAnimating) return;
 
         const rotateStep = 0.1; // radians
+        const key = event.key.toLowerCase();
 
-        switch (event.key) {
-            case 'ArrowUp':
+        // Handle WASD movement keys
+        switch (key) {
+            case 'w':
+                this.keysPressed.w = true;
+                event.preventDefault();
+                break;
+            case 'a':
+                this.keysPressed.a = true;
+                event.preventDefault();
+                break;
+            case 's':
+                this.keysPressed.s = true;
+                event.preventDefault();
+                break;
+            case 'd':
+                this.keysPressed.d = true;
+                event.preventDefault();
+                break;
+            // Arrow keys still work for view rotation
+            case 'arrowup':
                 event.preventDefault();
                 this.viewDirection.pitch = Math.max(
                     this.minPitch,
                     this.viewDirection.pitch + rotateStep
                 );
+                this.updateCameraPosition();
                 break;
-            case 'ArrowDown':
+            case 'arrowdown':
                 event.preventDefault();
                 this.viewDirection.pitch = Math.min(
                     this.maxPitch,
                     this.viewDirection.pitch - rotateStep
                 );
+                this.updateCameraPosition();
                 break;
-            case 'ArrowLeft':
+            case 'arrowleft':
                 event.preventDefault();
                 this.viewDirection.yaw += rotateStep;
+                this.updateCameraPosition();
                 break;
-            case 'ArrowRight':
+            case 'arrowright':
                 event.preventDefault();
                 this.viewDirection.yaw -= rotateStep;
+                this.updateCameraPosition();
                 break;
         }
+    }
 
-        this.updateCameraPosition();
+    onKeyUp(event) {
+        const key = event.key.toLowerCase();
+
+        switch (key) {
+            case 'w':
+                this.keysPressed.w = false;
+                break;
+            case 'a':
+                this.keysPressed.a = false;
+                break;
+            case 's':
+                this.keysPressed.s = false;
+                break;
+            case 'd':
+                this.keysPressed.d = false;
+                break;
+        }
+    }
+
+    /**
+     * Set the scene for raycasting (must be called before movement works)
+     * Also initializes the raycaster
+     */
+    setScene(scene) {
+        this.scene = scene;
+        // Lazy load THREE.Raycaster if not already imported
+        if (!this.raycaster && window.THREE) {
+            this.raycaster = new window.THREE.Raycaster();
+        }
+    }
+
+    /**
+     * Get terrain height at a specific world position using raycasting
+     * Returns the Y coordinate of the terrain surface, or current Y if no terrain found
+     */
+    getTerrainHeightAt(x, z) {
+        if (!this.raycaster || !this.scene) {
+            return this.cameraPosition.y; // Fallback to current height
+        }
+
+        // Cast a ray downward from high above to find terrain
+        const rayStart = new window.THREE.Vector3(x, 500, z);
+        const rayDirection = new window.THREE.Vector3(0, -1, 0);
+        this.raycaster.set(rayStart, rayDirection);
+
+        // Get all meshes in scene (except camera)
+        const intersects = this.raycaster.intersectObjects(this.scene.children, true);
+
+        // Find the first (topmost) intersection point
+        if (intersects.length > 0) {
+            return intersects[0].point.y;
+        }
+
+        return this.cameraPosition.y; // Return current height if no terrain found
+    }
+
+    /**
+     * Update camera position based on pressed movement keys and terrain
+     * Should be called every frame for smooth movement
+     */
+    updateMovement() {
+        if (!this.keysPressed.w && !this.keysPressed.a && !this.keysPressed.s && !this.keysPressed.d) {
+            return; // No movement keys pressed
+        }
+
+        let moveX = 0;
+        let moveZ = 0;
+
+        // Calculate movement vector based on pressed keys
+        // W/S moves forward/backward along view direction
+        if (this.keysPressed.w) {
+            moveX += Math.sin(this.viewDirection.yaw);
+            moveZ += Math.cos(this.viewDirection.yaw);
+        }
+        if (this.keysPressed.s) {
+            moveX -= Math.sin(this.viewDirection.yaw);
+            moveZ -= Math.cos(this.viewDirection.yaw);
+        }
+
+        // A/D moves left/right perpendicular to view direction
+        if (this.keysPressed.a) {
+            moveX += Math.sin(this.viewDirection.yaw + Math.PI / 2);
+            moveZ += Math.cos(this.viewDirection.yaw + Math.PI / 2);
+        }
+        if (this.keysPressed.d) {
+            moveX -= Math.sin(this.viewDirection.yaw + Math.PI / 2);
+            moveZ -= Math.cos(this.viewDirection.yaw + Math.PI / 2);
+        }
+
+        // Normalize diagonal movement
+        const moveMagnitude = Math.sqrt(moveX * moveX + moveZ * moveZ);
+        if (moveMagnitude > 0) {
+            moveX = (moveX / moveMagnitude) * this.movementSpeed;
+            moveZ = (moveZ / moveMagnitude) * this.movementSpeed;
+
+            // Calculate new camera position
+            const newX = this.cameraPosition.x + moveX;
+            const newZ = this.cameraPosition.z + moveZ;
+
+            // Get terrain height at new position
+            const terrainHeight = this.getTerrainHeightAt(newX, newZ);
+            const newY = terrainHeight + this.eyeHeight;
+
+            // Update camera position
+            this.cameraPosition.x = newX;
+            this.cameraPosition.y = newY;
+            this.cameraPosition.z = newZ;
+
+            this.updateCameraPosition();
+        }
     }
 
     /**

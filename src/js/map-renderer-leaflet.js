@@ -56,7 +56,7 @@ export class MapRenderer {
         // Trigger initial size calculation
         this.map.invalidateSize();
 
-        console.log('Leaflet map initialized');
+        // console.log('Leaflet map initialized');
     }
 
     /**

@@ -339,3 +339,88 @@ kbd {
         min-height: 0;
     }
 }
+
+/* ============================================================
+   MINIMAP OVERLAY STYLES
+   ============================================================ */
+
+/* Minimap container */
+#minimap {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 200px;
+    height: 200px;
+    border: 2px solid #404040;
+    border-radius: 4px;
+    z-index: 1000;
+    pointer-events: none; /* Pass click events to 3D view */
+    display: none; /* Hidden by default */
+    overflow: hidden;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Show minimap only when canvas is active (3D view mode) */
+#canvas.active ~ #minimap {
+    display: block;
+}
+
+/* Leaflet map container styling */
+#minimap .leaflet-container {
+    width: 100%;
+    height: 100%;
+    background: rgba(26, 26, 26, 0.9);
+}
+
+/* Leaflet tiles in minimap */
+#minimap .leaflet-tile-pane {
+    border: none;
+}
+
+/* Compass overlay */
+.minimap-compass {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1001; /* Above map layers */
+}
+
+/* Compass text styling */
+.minimap-compass span {
+    position: absolute;
+    color: #e0e0e0;
+    font-weight: bold;
+    font-size: 14px;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* North (top) */
+.compass-n {
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+/* South (bottom) */
+.compass-s {
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+/* East (right) */
+.compass-e {
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+/* West (left) */
+.compass-w {
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+}

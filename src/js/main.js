@@ -9,6 +9,7 @@ import { MapViewManager } from './map-view-leaflet.js';
 import { MapRenderer } from './map-renderer-leaflet.js';
 import { ElevationLookup } from './elevation-lookup.js';
 import { ViewModeManager, VIEW_MODE } from './view-mode-manager.js';
+import { Minimap } from './minimap.js';
 
 // Import WASM module
 import init, {
@@ -28,8 +29,9 @@ class PeakVistaApp {
         this.mapContainer = document.getElementById('map-container');
 
         // Initialize renderers - ensure canvas is temporarily visible for Three.js initialization
+        // Pass optimization profile to renderer (default: maximum performance mode)
         this.canvas.classList.add('active');
-        this.terrainRenderer = new TerrainRenderer(this.canvas);
+        this.terrainRenderer = new TerrainRenderer(this.canvas, this.optimizationProfile);
         this.canvas.classList.remove('active');
         this.mapRenderer = null; // Will be initialized later
 
@@ -50,6 +52,7 @@ class PeakVistaApp {
         // UI and monitoring
         this.uiController = null;
         this.perfMonitor = new PerformanceMonitor();
+        this.minimap = null;
 
         this.statusDiv = document.getElementById('status');
         this.locationForm = document.getElementById('location-form');
@@ -67,6 +70,33 @@ class PeakVistaApp {
         window.perfMonitor = this.perfMonitor;
         window.deviceDetector = this.deviceDetector;
         window.app = this;
+
+        // Add console commands for performance tuning
+        window.setPerformanceMode = (mode) => {
+            if (mode === 'balanced') {
+                this.optimizationProfile.useBalancedLighting = true;
+                console.log('✓ Switched to BALANCED MODE (shadows enabled, 1024x1024 shadow maps)');
+                console.log('  Reload the page or reload tiles to see changes');
+            } else if (mode === 'max') {
+                this.optimizationProfile.useBalancedLighting = false;
+                console.log('✓ Switched to MAXIMUM PERFORMANCE MODE (no shadows)');
+                console.log('  Reload the page or reload tiles to see changes');
+            } else {
+                console.log('Usage: setPerformanceMode("max") or setPerformanceMode("balanced")');
+            }
+        };
+
+        // Log performance optimizations applied
+        console.group('🚀 Performance Optimizations');
+        console.log('✓ Removed redundant vertex normal recalculation after mesh scaling');
+        console.log('✓ Disabled shadow casting for terrain tiles (major GPU cost reduction)');
+        console.log('✓ Simplified lighting: DirectionalLight + AmbientLight only');
+        console.log('✓ Increased ambient light intensity to compensate for no shadows');
+        console.log('✓ Current mode: ' + (this.optimizationProfile.useBalancedLighting ? 'BALANCED' : 'MAXIMUM PERFORMANCE'));
+        console.log('\nUsage:');
+        console.log('  window.setPerformanceMode("max")      // Maximum performance (default)');
+        console.log('  window.setPerformanceMode("balanced") // Balanced with 1024x1024 shadows');
+        console.groupEnd();
     }
 
     async init() {
@@ -122,6 +152,10 @@ class PeakVistaApp {
 
             // Initialize terrain view manager
             this.terrainView = new TerrainViewManager(CoordinateTransform);
+
+            // Initialize minimap
+            this.minimap = new Minimap(this.terrainRenderer, this.terrainView);
+            this.minimap.init();
 
             // Initialize view mode manager
             this.viewModeManager = new ViewModeManager(this);
@@ -253,7 +287,7 @@ class PeakVistaApp {
 
             // Load new tiles asynchronously
             if (tilesToLoad.length > 0) {
-                console.log(`Loading ${tilesToLoad.length} new tiles based on view direction`);
+                // console.log(`Loading ${tilesToLoad.length} new tiles based on view direction`);
 
                 for (const tileInfo of tilesToLoad) {
                     try {
@@ -465,13 +499,13 @@ class PeakVistaApp {
     processTileData(tileInfo, data, meshGenerator) {
         try {
             const tileKey = `${tileInfo.z}/${tileInfo.x}/${tileInfo.y}`;
-            console.log(`Processing tile ${tileKey} (LOD ${tileInfo.lod})`);
+            // console.log(`Processing tile ${tileKey} (LOD ${tileInfo.lod})`);
 
             // Profile PNG parsing
             this.perfMonitor.startTiming('png-parse');
             const elevations = ElevationParser.parse_png(new Uint8Array(data));
             const parseDuration = this.perfMonitor.endTiming('png-parse');
-            console.log(`✓ PNG parsed in ${parseDuration.toFixed(2)}ms: ${elevations.length} elevation values`);
+            // console.log(`✓ PNG parsed in ${parseDuration.toFixed(2)}ms: ${elevations.length} elevation values`);
 
             // Profile mesh generation
             this.perfMonitor.startTiming('mesh-generation');
@@ -481,9 +515,9 @@ class PeakVistaApp {
             const vertexCount = meshData.get_vertices().length / 3;
             const indexCount = meshData.get_indices().length;
             const triangleCount = indexCount / 3;
-            console.log(
-                `✓ Mesh generated in ${meshDuration.toFixed(2)}ms: vertices=${vertexCount}, triangles=${triangleCount}`
-            );
+            // console.log(
+            //     `✓ Mesh generated in ${meshDuration.toFixed(2)}ms: vertices=${vertexCount}, triangles=${triangleCount}`
+            // );
 
             // Use absolute coordinates for relative positioning
             const baseTileX = Math.floor(CoordinateTransform.latlon_to_tile_x(this.currentViewpoint.lon, 14));
@@ -496,7 +530,7 @@ class PeakVistaApp {
             this.perfMonitor.startTiming('threejs-mesh-create');
             const success = this.renderer.createTerrainMesh(tileInfo.z, relTileX, relTileY, meshData);
             const createDuration = this.perfMonitor.endTiming('threejs-mesh-create');
-            console.log(`✓ Mesh created in Three.js in ${createDuration.toFixed(2)}ms: ${success}`);
+            // console.log(`✓ Mesh created in Three.js in ${createDuration.toFixed(2)}ms: ${success}`);
 
             this.loadedTiles.add(tileKey);
 
@@ -553,6 +587,11 @@ class PeakVistaApp {
         this.terrainRenderer.animate(() => {
             // Record frame for performance monitoring
             this.perfMonitor.recordFrame();
+
+            // Update minimap if in terrain mode
+            if (this.viewModeManager && this.viewModeManager.isTerrainMode() && this.minimap) {
+                this.minimap.update();
+            }
 
             // If in map mode, update map renderer
             if (this.viewModeManager && this.viewModeManager.isMapMode() && this.mapRenderer) {

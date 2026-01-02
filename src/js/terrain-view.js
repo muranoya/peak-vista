@@ -269,26 +269,20 @@ export class TerrainViewManager {
      */
     getCameraPosition() {
         if (!this.currentViewpoint) {
-            return { x: 0, y: 1000, z: 2000 };
+            return { x: 0, y: 1000, z: 0 };
         }
 
-        const distanceMeters = this.viewDistance * 1000;
         const EYE_HEIGHT = 1.7; // Human eye height in meters
 
-        // Convert angle to radians (0 = north = +z, 90 = east = +x, etc)
-        const angleRad = ((this.viewAngle + 90) * Math.PI) / 180;
-
-        // Calculate horizontal distance from center based on view distance
-        const horizontalDistance = distanceMeters / 2;
-
-        // Camera is positioned at ground level + eye height looking into the distance
-        // The y-coordinate is the elevation + eye height
+        // In 360-degree panorama view, camera stands at the clicked point
+        // Relative coordinates: origin (0,0) is at the clicked point
+        // Camera should be directly above the clicked point at eye level
         const cameraHeight = (this.elevation || 0) + EYE_HEIGHT;
 
         return {
-            x: horizontalDistance * Math.cos(angleRad),
-            y: cameraHeight,
-            z: horizontalDistance * Math.sin(angleRad),
+            x: 0,  // Clicked point (center of relative coordinate system)
+            y: cameraHeight,  // Ground level + eye height
+            z: 0,  // Clicked point (center of relative coordinate system)
         };
     }
 
