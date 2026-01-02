@@ -134,6 +134,13 @@ class PeakVistaApp {
                 this.updateUIForMode(mode);
             });
 
+            // Setup camera view direction change callback for dynamic tile loading
+            if (this.terrainRenderer && this.terrainRenderer.cameraController) {
+                this.terrainRenderer.cameraController.onViewDirectionChanged = (viewInfo) => {
+                    this.onCameraViewDirectionChanged(viewInfo);
+                };
+            }
+
             this.updateStatus(`Ready - ${version}`, 'success');
         } catch (error) {
             this.updateStatus(`Failed to initialize: ${error.message}`, 'error');
@@ -149,8 +156,11 @@ class PeakVistaApp {
             const lon = parseFloat(document.getElementById('lon-input').value);
             const angle = parseFloat(document.getElementById('angle-input').value);
             const distance = parseFloat(document.getElementById('distance-input').value);
+            
+            // Use elevation from current viewpoint if available, otherwise 0
+            const elevation = this.currentViewpoint?.elevation || 0;
 
-            this.loadView(lat, lon, angle, distance);
+            this.loadView(lat, lon, angle, distance, elevation);
         });
 
         // Map click handling will be registered after mapRenderer is initialized
@@ -179,11 +189,91 @@ class PeakVistaApp {
             document.getElementById('angle-input').value = '0';
             document.getElementById('distance-input').value = '10';
 
-            // Switch to terrain mode and load view
+            // Switch to terrain mode and load view with elevation
             await this.viewModeManager.switchMode(VIEW_MODE.TERRAIN);
-            await this.loadView(lat, lon, 0, 10);
+            await this.loadView(lat, lon, 0, 10, elevation);
         } else {
             this.updateStatus(`Failed to get elevation data`, 'error');
+        }
+    }
+
+    /**
+     * Handle camera view direction change - load new tiles based on view direction
+     */
+    async onCameraViewDirectionChanged(viewInfo) {
+        // Only load new tiles if we're in terrain mode and not currently loading
+        if (!this.viewModeManager || !this.viewModeManager.isTerrainMode() || this.isLoading) {
+            return;
+        }
+
+        try {
+            // Calculate required tiles based on current view direction
+            if (!this.currentViewpoint) {
+                return;
+            }
+
+            // Get all tiles that might be visible
+            let allTiles = this.terrainView.calculateRequiredTiles(14);
+
+            // Prioritize tiles based on view direction
+            const prioritizedTiles = this.terrainView.prioritizeTilesByViewDirection(
+                allTiles,
+                viewInfo.yaw,
+                viewInfo.pitch
+            );
+
+            // Check which tiles are not yet loaded
+            const tilesToLoad = [];
+            const meshGenerator = new MeshGenerator(2.0);
+
+            for (const tileInfo of prioritizedTiles) {
+                const tileKey = `${tileInfo.z}/${tileInfo.x}/${tileInfo.y}`;
+                
+                // Skip if already loaded
+                if (this.renderer.tileMeshes && this.renderer.tileMeshes.has(tileKey)) {
+                    continue;
+                }
+
+                // Check cache
+                const cachedData = await this.tileCache.getTile(tileInfo.z, tileInfo.x, tileInfo.y);
+                if (!cachedData) {
+                    tilesToLoad.push(tileInfo);
+                } else {
+                    // Process cached tile
+                    this.processTileData(tileInfo, cachedData, meshGenerator);
+                }
+            }
+
+            // Limit tiles to load to avoid overwhelming the network
+            // Increased limit to ensure 360-degree coverage
+            const maxNewTiles = 15;
+            if (tilesToLoad.length > maxNewTiles) {
+                tilesToLoad.splice(maxNewTiles);
+            }
+
+            // Load new tiles asynchronously
+            if (tilesToLoad.length > 0) {
+                console.log(`Loading ${tilesToLoad.length} new tiles based on view direction`);
+
+                for (const tileInfo of tilesToLoad) {
+                    try {
+                        const tileData = await this.fetcher.fetchTile(tileInfo.z, tileInfo.x, tileInfo.y);
+                        
+                        // Cache the tile
+                        await this.tileCache.storeTile(tileInfo.z, tileInfo.x, tileInfo.y, tileData);
+                        
+                        // Process and display the tile
+                        this.processTileData(tileInfo, tileData, meshGenerator);
+                    } catch (error) {
+                        console.warn(
+                            `Failed to load tile ${tileInfo.z}/${tileInfo.x}/${tileInfo.y}:`,
+                            error
+                        );
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error loading tiles for view direction:', error);
         }
     }
 
@@ -224,14 +314,14 @@ class PeakVistaApp {
         }
     }
 
-    async loadView(lat, lon, angle, distance) {
+    async loadView(lat, lon, angle, distance, elevation = 0) {
         if (this.isLoading) {
             this.updateStatus('Already loading...', 'loading');
             return;
         }
 
         this.isLoading = true;
-        this.currentViewpoint = { lat, lon, angle, distance };
+        this.currentViewpoint = { lat, lon, angle, distance, elevation };
 
         try {
             this.updateStatus(
@@ -239,8 +329,8 @@ class PeakVistaApp {
                 'loading'
             );
 
-            // Set viewpoint in terrain manager
-            this.terrainView.setViewpoint(lat, lon, angle, distance);
+            // Set viewpoint in terrain manager with elevation
+            this.terrainView.setViewpoint(lat, lon, angle, distance, elevation);
 
             // Calculate required tiles based on viewpoint and distance
             let requiredTiles = this.terrainView.calculateRequiredTiles(14);
@@ -249,12 +339,12 @@ class PeakVistaApp {
             const maxTiles = this.optimizationProfile.maxTiles;
             const maxLodLevel = this.optimizationProfile.maxLodLevel;
 
-            // Limit tile count and LOD based on device capability
-            if (requiredTiles.length > maxTiles) {
-                // Sort by distance and keep closest tiles
-                requiredTiles = requiredTiles.slice(0, maxTiles);
+            // Keep all required tiles for 360-degree coverage
+            // Only warn if exceeding device limit (but still try to load all)
+            const calculatedCount = requiredTiles.length;
+            if (calculatedCount > maxTiles) {
                 this.updateStatus(
-                    `Device limit: ${maxTiles} tiles (calculated ${requiredTiles.length + maxTiles})`,
+                    `Note: ${calculatedCount} tiles needed (device max: ${maxTiles}) - may impact performance`,
                     'info'
                 );
             }
@@ -346,9 +436,15 @@ class PeakVistaApp {
             // Evict LRU tiles if memory is getting full
             this.renderer.evictLRUTiles(this.optimizationProfile.maxTiles);
 
-            // Get camera position from terrain view manager
+            // Get camera position and target from terrain view manager
             const cameraPos = this.terrainView.getCameraPosition();
-            this.renderer.setCameraPosition(cameraPos.x, cameraPos.y, cameraPos.z);
+            const cameraTarget = this.terrainView.getCameraTarget();
+            
+            // Set camera position and target (synchronizes with CameraController)
+            this.renderer.setCameraPosition(
+                cameraPos.x, cameraPos.y, cameraPos.z,
+                cameraTarget.x, cameraTarget.y, cameraTarget.z
+            );
 
             // Get cache stats and memory stats
             const cacheStats = this.tileCache.getStats();

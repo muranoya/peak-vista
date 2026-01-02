@@ -82,7 +82,7 @@ export class DeviceDetector {
     getOptimizationProfile() {
         // Determine profile based on device capabilities
         const profile = {
-            maxTiles: 25,
+            maxTiles: 150,  // Large number for 360-degree terrain coverage
             maxLodLevel: 2,
             renderDistance: 10, // km
             targetFPS: 60,
@@ -93,7 +93,7 @@ export class DeviceDetector {
 
         // Mobile optimization
         if (this.isMobile && !this.isTablet) {
-            profile.maxTiles = 9;
+            profile.maxTiles = 36;  // Moderate number for mobile
             profile.maxLodLevel = 1;
             profile.renderDistance = 5;
             profile.targetFPS = 30;
@@ -103,7 +103,7 @@ export class DeviceDetector {
         }
         // Tablet optimization
         else if (this.isTablet) {
-            profile.maxTiles = 16;
+            profile.maxTiles = 80;  // Good coverage for tablets
             profile.maxLodLevel = 1;
             profile.renderDistance = 7;
             profile.targetFPS = 30;

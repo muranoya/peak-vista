@@ -97,21 +97,46 @@ export class TerrainRenderer {
             const verticesArray = meshData.get_vertices();
             geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verticesArray), 3));
 
+            // Get indices from WASM (must be set before computing normals)
+            const indicesArray = meshData.get_indices();
+            geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indicesArray), 1));
+            
             // Get normal data from WASM
             const normalsArray = meshData.get_normals();
             geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normalsArray), 3));
+            
+            // Recompute normals to ensure they point in the correct direction for terrain
+            // This is critical for proper lighting and back-face culling
+            geometry.computeVertexNormals();
+            geometry.normalizeNormals();
 
-            // Get indices from WASM
-            const indicesArray = meshData.get_indices();
-            geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indicesArray), 1));
+            // Compute bounds to ensure proper geometry size
+            geometry.computeBoundingBox();
+            geometry.computeBoundingSphere();
+            
+            const boundingBox = geometry.boundingBox;
+            const geomWidth = boundingBox.max.x - boundingBox.min.x;
+            const geomDepth = boundingBox.max.z - boundingBox.min.z;
+            
+            // Verify geometry integrity
+            const vertexCount = geometry.attributes.position.count;
+            const indexCount = geometry.index.count;
+            const triangleCount = indexCount / 3;
+            
+            console.log(
+                `Geometry ${key}: vertices=${vertexCount}, triangles=${triangleCount}, bounds=${geomWidth.toFixed(1)}x${geomDepth.toFixed(1)}m`
+            );
 
-            // Create material
+            // Create material with proper culling and shading
             const material = new THREE.MeshStandardMaterial({
                 color: 0x8b7355,
                 metalness: 0.1,
                 roughness: 0.8,
                 flatShading: false,
-                side: THREE.DoubleSide,
+                side: THREE.FrontSide,  // Back-face culling enabled for proper lighting
+                transparent: false,      // Explicitly disable transparency
+                depthTest: true,         // Enable depth testing
+                depthWrite: true,        // Enable depth writing
             });
 
             // Create mesh
@@ -123,13 +148,19 @@ export class TerrainRenderer {
             const tileSize = 1000; // meters per tile
             mesh.position.x = x * tileSize;
             mesh.position.z = y * tileSize;
+            
+            // Apply minimal overlap (0.2%) to eliminate gaps between tiles
+            // This is necessary due to floating-point precision in mesh generation
+            const overlap = 1.002;
+            mesh.scale.set(overlap, 1, overlap);
 
             console.log(
-                `Mesh positioned at (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`
+                `Mesh positioned at (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z}), scaled=${overlap.toFixed(4)}`
             );
             console.log(`Scene children before add: ${this.scene.children.length}`);
 
-            // Add to scene
+            // Add to scene with proper z-order to avoid z-fighting
+            mesh.renderOrder = z;
             this.scene.add(mesh);
             this.tileMeshes.set(key, mesh);
 
@@ -248,26 +279,44 @@ export class TerrainRenderer {
         loop();
     }
 
-    setCameraPosition(x, y, z) {
-        // Support both old (lat, lon, distance) and new (x, y, z) signatures
-        if (typeof x === 'number' && typeof y === 'number' && typeof z === 'number') {
-            // New signature: world coordinates
-            console.log(
-                `Setting camera position: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
-            );
-            this.camera.position.set(x, y, z);
-            this.camera.lookAt(0, 0, 0);
-        } else {
-            // Legacy: assume x=lat, y=lon, z=distance
-            const lat = x;
-            const lon = y;
-            const distance = z;
-            const height = 1000 + distance / 2;
-            const radius = distance / 2;
-
-            console.log(`Camera setting: height=${height}, radius=${radius}, distance=${distance}`);
-            this.camera.position.set(radius, height, radius);
-            this.camera.lookAt(0, 0, 0);
+    setCameraPosition(x, y, z, targetX = 0, targetY = 0, targetZ = 0) {
+        // Set camera position
+        console.log(
+            `Setting camera position: (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
+        );
+        this.camera.position.set(x, y, z);
+        
+        // Sync CameraController with the new camera position
+        if (this.cameraController) {
+            // In StreetView mode, camera position is fixed
+            this.cameraController.setCameraPosition(x, y, z);
+            
+            // Calculate view direction (yaw, pitch) from target point if provided
+            // For initial setup, calculate from target point if provided
+            const dx = targetX - x;
+            const dy = targetY - y;
+            const dz = targetZ - z;
+            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            
+            // Only set view direction if target point is far enough from camera
+            if (distance > 5) {
+                // Convert to yaw and pitch
+                const yaw = Math.atan2(dx, dz);
+                const horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+                const pitch = Math.atan2(dy, horizontalDistance);
+                
+                this.cameraController.setViewDirection(yaw, pitch);
+                
+                console.log(
+                    `CameraController synced: position=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}), yaw=${yaw.toFixed(3)}, pitch=${pitch.toFixed(3)}`
+                );
+            } else {
+                // Use default view direction if target is too close
+                this.cameraController.resetCamera();
+                console.log(
+                    `CameraController reset: position=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`
+                );
+            }
         }
     }
 

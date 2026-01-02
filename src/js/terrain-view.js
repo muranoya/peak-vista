@@ -16,10 +16,11 @@ export class TerrainViewManager {
     /**
      * Set viewpoint
      */
-    setViewpoint(lat, lon, viewAngle = 0, viewDistance = 10) {
+    setViewpoint(lat, lon, viewAngle = 0, viewDistance = 10, elevation = 0) {
         this.currentViewpoint = { lat, lon };
         this.viewAngle = viewAngle;
         this.viewDistance = viewDistance; // in km
+        this.elevation = elevation; // in meters
     }
 
     /**
@@ -39,7 +40,8 @@ export class TerrainViewManager {
         const centerTileY = this.coordinateTransform.latlon_to_tile_y(lat, zoomLevel);
 
         // Calculate how many tiles are needed based on view distance
-        const tilesAcross = Math.ceil((distanceMeters / 2) / this.tileSize) + 1;
+        // Greatly increased range for full 360-degree view of surrounding terrain
+        const tilesAcross = Math.ceil((distanceMeters / 2) / this.tileSize) + 8;
 
         const tiles = [];
         const visited = new Set();
@@ -87,6 +89,55 @@ export class TerrainViewManager {
         tiles.sort((a, b) => a.distance - b.distance);
 
         return tiles;
+    }
+
+    /**
+     * Filter and prioritize tiles based on view direction
+     * Useful for loading tiles in order of importance when viewing in a specific direction
+     */
+    prioritizeTilesByViewDirection(tiles, viewYaw, viewPitch) {
+        if (!tiles || tiles.length === 0) {
+            return tiles;
+        }
+
+        const { lat, lon } = this.currentViewpoint;
+        const centerTileX = this.coordinateTransform.latlon_to_tile_x(lon, 14);
+        const centerTileY = this.coordinateTransform.latlon_to_tile_y(lat, 14);
+
+        // Convert yaw to world direction (-PI to PI)
+        // yaw: 0 = +z, PI/2 = +x, -PI/2 = -x, PI = -z
+        const viewDirection = {
+            x: Math.sin(viewYaw),
+            z: Math.cos(viewYaw)
+        };
+
+        // Calculate priority for each tile based on alignment with view direction
+        return tiles.map(tile => {
+            // Tile center relative to camera
+            const relTileX = tile.x - centerTileX;
+            const relTileZ = tile.y - centerTileY;
+            
+            // Normalize tile direction
+            const dist = Math.sqrt(relTileX * relTileX + relTileZ * relTileZ);
+            if (dist < 0.1) {
+                // Center tile has highest priority
+                return { ...tile, priority: 1000 };
+            }
+            
+            const tileDir = {
+                x: relTileX / dist,
+                z: relTileZ / dist
+            };
+            
+            // Calculate dot product (alignment with view direction)
+            const alignment = viewDirection.x * tileDir.x + viewDirection.z * tileDir.z;
+            
+            // Priority: alignment + distance factor
+            // Tiles in front of view direction get higher priority
+            const priority = (alignment + 1) * 50 - dist;
+            
+            return { ...tile, priority };
+        }).sort((a, b) => b.priority - a.priority);
     }
 
     /**
@@ -175,16 +226,36 @@ export class TerrainViewManager {
      * Get camera target position (center of view)
      * Returns world coordinates
      */
+    /**
+     * Get camera target position (what the camera should look at)
+     * Returns world coordinates
+     */
+    /**
+     * Get camera target position (what the camera should look at)
+     * Calculated from initial view direction (yaw=0, pitch=-0.2) to show surrounding terrain
+     * Returns world coordinates
+     */
     getCameraTarget() {
         if (!this.currentViewpoint) {
             return { x: 0, y: 0, z: 0 };
         }
 
-        // Simplified: use center tile coordinates as target
+        const EYE_HEIGHT = 1.7; // Human eye height in meters
+        const distance = 50; // Distance to look-at point (meters)
+        
+        // Initial view direction (yaw=0 = north, pitch=-0.2 = slightly downward)
+        const initialYaw = 0;
+        const initialPitch = -0.2;
+        
+        // Calculate target from initial view direction
+        const targetX = 0 + distance * Math.sin(initialYaw) * Math.cos(initialPitch);
+        const targetY = (this.elevation || 0) + EYE_HEIGHT + distance * Math.sin(initialPitch);
+        const targetZ = 0 + distance * Math.cos(initialYaw) * Math.cos(initialPitch);
+        
         return {
-            x: 0,
-            y: 0,
-            z: 0,
+            x: targetX,
+            y: targetY,
+            z: targetZ,
         };
     }
 
@@ -192,27 +263,31 @@ export class TerrainViewManager {
      * Get camera position based on viewpoint, angle, and distance
      * Returns world coordinates
      */
+    /**
+     * Get camera position based on viewpoint, angle, and distance
+     * Returns world coordinates from the clicked point
+     */
     getCameraPosition() {
         if (!this.currentViewpoint) {
             return { x: 0, y: 1000, z: 2000 };
         }
 
         const distanceMeters = this.viewDistance * 1000;
+        const EYE_HEIGHT = 1.7; // Human eye height in meters
 
         // Convert angle to radians (0 = north = +z, 90 = east = +x, etc)
         const angleRad = ((this.viewAngle + 90) * Math.PI) / 180;
 
-        // Calculate horizontal distance from center
+        // Calculate horizontal distance from center based on view distance
         const horizontalDistance = distanceMeters / 2;
 
-        // Estimate height based on distance and typical terrain
-        // Assume viewing angle ~20 degrees above horizon
-        const viewingAngleRad = (20 * Math.PI) / 180;
-        const height = horizontalDistance * Math.tan(viewingAngleRad) + 1000;
+        // Camera is positioned at ground level + eye height looking into the distance
+        // The y-coordinate is the elevation + eye height
+        const cameraHeight = (this.elevation || 0) + EYE_HEIGHT;
 
         return {
             x: horizontalDistance * Math.cos(angleRad),
-            y: height,
+            y: cameraHeight,
             z: horizontalDistance * Math.sin(angleRad),
         };
     }

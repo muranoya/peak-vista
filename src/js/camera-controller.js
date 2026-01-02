@@ -8,35 +8,39 @@ export class CameraController {
         this.camera = camera;
         this.canvas = canvas;
 
-        // State
+        // StreetView mode: fixed camera position, only viewing direction changes
+        // Camera position (world coordinates) - fixed
+        this.cameraPosition = { x: 0, y: 0, z: 0 };
+        
+        // Viewing direction (Euler angles in radians)
+        this.viewDirection = {
+            yaw: 0,      // horizontal rotation (0 = looking at +z)
+            pitch: -0.2, // vertical rotation (-PI/2 = down, PI/2 = up), slightly downward for better terrain view
+        };
+
+        // Control constraints
+        this.minPitch = -Math.PI / 3;  // -60 degrees down
+        this.maxPitch = Math.PI / 3;   // +60 degrees up
+        
+        // Control sensitivity
+        this.rotateSensitivity = 0.005;
+
+        // Mouse state
         this.isDragging = false;
         this.previousMousePosition = { x: 0, y: 0 };
 
-        // Camera parameters
-        this.sphericalCoordinates = {
-            radius: 5000,
-            theta: 0, // azimuth angle
-            phi: Math.PI / 4, // polar angle from top
-        };
-
-        this.minRadius = 500;
-        this.maxRadius = 50000;
-        this.minPhi = 0.1;
-        this.maxPhi = Math.PI - 0.1;
-
-        // Control sensitivity
-        this.rotateSensitivity = 0.005;
-        this.zoomSensitivity = 0.1;
-        this.panSensitivity = 5;
-
-        // Animation
+        // Animation (for future use if needed)
         this.isAnimating = false;
         this.animationDuration = 500; // ms
-        this.targetPosition = null;
         this.animationStartTime = null;
-
-        // Target point (what camera looks at)
-        this.targetPoint = { x: 0, y: 0, z: 0 };
+        
+        // Callback for view direction changes (for loading dynamic tiles)
+        this.onViewDirectionChanged = null;
+        
+        // Track last reported view direction to avoid excessive callbacks
+        this.lastReportedYaw = this.viewDirection.yaw;
+        this.lastReportedPitch = this.viewDirection.pitch;
+        this.viewChangeThreshold = 0.05; // radians (~3 degrees)
 
         this.setupEventListeners();
         this.updateCameraPosition();
@@ -64,11 +68,14 @@ export class CameraController {
         const deltaX = event.clientX - this.previousMousePosition.x;
         const deltaY = event.clientY - this.previousMousePosition.y;
 
-        // Rotate based on mouse movement
-        this.sphericalCoordinates.theta -= deltaX * this.rotateSensitivity;
-        this.sphericalCoordinates.phi = Math.max(
-            this.minPhi,
-            Math.min(this.maxPhi, this.sphericalCoordinates.phi + deltaY * this.rotateSensitivity)
+        // Update view direction based on mouse movement
+        // Horizontal movement changes yaw
+        this.viewDirection.yaw -= deltaX * this.rotateSensitivity;
+
+        // Vertical movement changes pitch (with constraints)
+        this.viewDirection.pitch = Math.max(
+            this.minPitch,
+            Math.min(this.maxPitch, this.viewDirection.pitch + deltaY * this.rotateSensitivity)
         );
 
         this.updateCameraPosition();
@@ -81,61 +88,37 @@ export class CameraController {
     }
 
     onMouseWheel(event) {
-        if (this.isAnimating) return;
-
+        // In StreetView mode, mouse wheel is disabled (camera position is fixed)
         event.preventDefault();
-
-        const zoomDirection = event.deltaY > 0 ? 1 : -1;
-        const newRadius = this.sphericalCoordinates.radius + zoomDirection * 500 * this.zoomSensitivity;
-
-        this.sphericalCoordinates.radius = Math.max(this.minRadius, Math.min(this.maxRadius, newRadius));
-
-        this.updateCameraPosition();
     }
 
     onKeyDown(event) {
         if (this.isAnimating) return;
 
-        const step = 200; // meters per key press
         const rotateStep = 0.1; // radians
 
         switch (event.key) {
             case 'ArrowUp':
                 event.preventDefault();
-                this.panTarget(0, step, 0); // Move camera forward
+                this.viewDirection.pitch = Math.max(
+                    this.minPitch,
+                    this.viewDirection.pitch + rotateStep
+                );
                 break;
             case 'ArrowDown':
                 event.preventDefault();
-                this.panTarget(0, -step, 0); // Move camera backward
+                this.viewDirection.pitch = Math.min(
+                    this.maxPitch,
+                    this.viewDirection.pitch - rotateStep
+                );
                 break;
             case 'ArrowLeft':
                 event.preventDefault();
-                this.sphericalCoordinates.theta += rotateStep;
+                this.viewDirection.yaw += rotateStep;
                 break;
             case 'ArrowRight':
                 event.preventDefault();
-                this.sphericalCoordinates.theta -= rotateStep;
-                break;
-            case 'w':
-                this.panTarget(0, step, 0);
-                break;
-            case 's':
-                this.panTarget(0, -step, 0);
-                break;
-            case 'a':
-                this.panTarget(-step, 0, 0);
-                break;
-            case 'd':
-                this.panTarget(step, 0, 0);
-                break;
-            case '+':
-            case '=':
-                event.preventDefault();
-                this.sphericalCoordinates.radius *= 0.9;
-                break;
-            case '-':
-                event.preventDefault();
-                this.sphericalCoordinates.radius *= 1.1;
+                this.viewDirection.yaw -= rotateStep;
                 break;
         }
 
@@ -145,46 +128,80 @@ export class CameraController {
     /**
      * Pan the camera target point
      */
-    panTarget(dx, dy, dz) {
-        this.targetPoint.x += dx;
-        this.targetPoint.y += dy;
-        this.targetPoint.z += dz;
+    /**
+     * Move camera position (mainly for compatibility)
+     */
+    moveCameraPosition(dx, dy, dz) {
+        this.cameraPosition.x += dx;
+        this.cameraPosition.y += dy;
+        this.cameraPosition.z += dz;
+        this.updateCameraPosition();
     }
 
     /**
      * Update camera position based on spherical coordinates
      */
+    /**
+     * Update camera position and look direction
+     * In StreetView mode: camera position is fixed, only view direction changes
+     */
+    /**
+     * Update camera position and look direction
+     * In StreetView mode: camera position is fixed, only view direction changes
+     */
     updateCameraPosition() {
-        const { radius, theta, phi } = this.sphericalCoordinates;
+        // Set camera position (fixed)
+        this.camera.position.set(this.cameraPosition.x, this.cameraPosition.y, this.cameraPosition.z);
 
-        // Convert spherical to Cartesian coordinates
-        const x = radius * Math.sin(phi) * Math.sin(theta);
-        const y = radius * Math.cos(phi);
-        const z = radius * Math.sin(phi) * Math.cos(theta);
+        // Calculate look-at target based on view direction (yaw, pitch)
+        // Yaw: 0 = looking at +z, PI/2 = looking at +x, -PI/2 = looking at -x, PI = looking at -z
+        // Pitch: 0 = looking at horizon, PI/2 = looking up, -PI/2 = looking down
+        
+        const distance = 100; // arbitrary distance for lookAt point
+        const targetX = this.cameraPosition.x + distance * Math.sin(this.viewDirection.yaw) * Math.cos(this.viewDirection.pitch);
+        const targetY = this.cameraPosition.y + distance * Math.sin(this.viewDirection.pitch);
+        const targetZ = this.cameraPosition.z + distance * Math.cos(this.viewDirection.yaw) * Math.cos(this.viewDirection.pitch);
 
-        // Update camera position
-        this.camera.position.set(this.targetPoint.x + x, this.targetPoint.y + y, this.targetPoint.z + z);
-
-        // Look at target
-        this.camera.lookAt(this.targetPoint.x, this.targetPoint.y, this.targetPoint.z);
+        this.camera.lookAt(targetX, targetY, targetZ);
+        
+        // Check if view direction changed significantly and notify callback
+        const yawDiff = Math.abs(this.viewDirection.yaw - this.lastReportedYaw);
+        const pitchDiff = Math.abs(this.viewDirection.pitch - this.lastReportedPitch);
+        
+        if ((yawDiff > this.viewChangeThreshold || pitchDiff > this.viewChangeThreshold) && this.onViewDirectionChanged) {
+            this.onViewDirectionChanged({
+                yaw: this.viewDirection.yaw,
+                pitch: this.viewDirection.pitch,
+                position: { ...this.cameraPosition }
+            });
+            
+            // Update tracked values
+            this.lastReportedYaw = this.viewDirection.yaw;
+            this.lastReportedPitch = this.viewDirection.pitch;
+        }
     }
 
     /**
      * Get current camera spherical coordinates
      */
-    getSphericalCoordinates() {
-        return { ...this.sphericalCoordinates };
+    /**
+     * Get current view direction
+     */
+    getViewDirection() {
+        return { ...this.viewDirection };
     }
 
     /**
      * Set camera spherical coordinates
      */
-    setSphericalCoordinates(radius, theta, phi) {
-        this.sphericalCoordinates.radius = Math.max(this.minRadius, Math.min(this.maxRadius, radius));
-        this.sphericalCoordinates.theta = theta;
-        this.sphericalCoordinates.phi = Math.max(
-            this.minPhi,
-            Math.min(this.maxPhi, phi)
+    /**
+     * Set view direction from Euler angles (compatibility method)
+     */
+    setViewDirection(yaw, pitch) {
+        this.viewDirection.yaw = yaw;
+        this.viewDirection.pitch = Math.max(
+            this.minPitch,
+            Math.min(this.maxPitch, pitch)
         );
         this.updateCameraPosition();
     }
@@ -192,29 +209,38 @@ export class CameraController {
     /**
      * Get target point
      */
-    getTargetPoint() {
-        return { ...this.targetPoint };
+    /**
+     * Get camera position
+     */
+    getCameraPosition() {
+        return { ...this.cameraPosition };
     }
 
     /**
      * Set target point
      */
-    setTargetPoint(x, y, z) {
-        this.targetPoint = { x, y, z };
+    /**
+     * Set camera position
+     */
+    setCameraPosition(x, y, z) {
+        this.cameraPosition = { x, y, z };
         this.updateCameraPosition();
     }
 
     /**
      * Animate camera to a new position
      */
-    async animateTo(targetSpherical, targetPointOffset, duration = this.animationDuration) {
+    /**
+     * Animate view direction to target (mainly for compatibility)
+     */
+    async animateTo(targetYaw, targetPitch, duration = this.animationDuration) {
         if (this.isAnimating) {
             return new Promise((resolve) => {
                 // Wait for current animation to finish
                 const checkInterval = setInterval(() => {
                     if (!this.isAnimating) {
                         clearInterval(checkInterval);
-                        this.animateTo(targetSpherical, targetPointOffset, duration).then(resolve);
+                        this.animateTo(targetYaw, targetPitch, duration).then(resolve);
                     }
                 }, 50);
             });
@@ -224,8 +250,8 @@ export class CameraController {
             this.isAnimating = true;
             this.animationStartTime = Date.now();
 
-            const startSpherical = { ...this.sphericalCoordinates };
-            const startPoint = { ...this.targetPoint };
+            const startYaw = this.viewDirection.yaw;
+            const startPitch = this.viewDirection.pitch;
 
             const animate = () => {
                 const elapsed = Date.now() - this.animationStartTime;
@@ -234,20 +260,12 @@ export class CameraController {
                 // Easing function (ease-in-out)
                 const easeProgress = progress < 0.5 ? 2 * progress * progress : -1 + 4 * progress - 2 * progress * progress;
 
-                // Interpolate spherical coordinates
-                this.sphericalCoordinates.radius =
-                    startSpherical.radius + (targetSpherical.radius - startSpherical.radius) * easeProgress;
-                this.sphericalCoordinates.theta =
-                    startSpherical.theta + (targetSpherical.theta - startSpherical.theta) * easeProgress;
-                this.sphericalCoordinates.phi =
-                    startSpherical.phi + (targetSpherical.phi - startSpherical.phi) * easeProgress;
-
-                // Interpolate target point
-                if (targetPointOffset) {
-                    this.targetPoint.x = startPoint.x + (targetPointOffset.x - startPoint.x) * easeProgress;
-                    this.targetPoint.y = startPoint.y + (targetPointOffset.y - startPoint.y) * easeProgress;
-                    this.targetPoint.z = startPoint.z + (targetPointOffset.z - startPoint.z) * easeProgress;
-                }
+                // Interpolate view direction
+                this.viewDirection.yaw = startYaw + (targetYaw - startYaw) * easeProgress;
+                this.viewDirection.pitch = Math.max(
+                    this.minPitch,
+                    Math.min(this.maxPitch, startPitch + (targetPitch - startPitch) * easeProgress)
+                );
 
                 this.updateCameraPosition();
 
@@ -266,36 +284,71 @@ export class CameraController {
     /**
      * Reset camera to default position
      */
+    /**
+     * Reset view direction to default
+     */
+    /**
+     * Reset view direction to default
+     */
     resetCamera() {
-        this.sphericalCoordinates = {
-            radius: 5000,
-            theta: 0,
-            phi: Math.PI / 4,
+        this.viewDirection = {
+            yaw: 0,
+            pitch: -0.2,  // Slightly downward for better terrain view
         };
-        this.targetPoint = { x: 0, y: 0, z: 0 };
         this.updateCameraPosition();
     }
 
     /**
      * Get camera state (for saving/loading)
      */
+    /**
+     * Get camera state (for saving/loading)
+     */
     getState() {
         return {
-            spherical: { ...this.sphericalCoordinates },
-            target: { ...this.targetPoint },
+            cameraPosition: { ...this.cameraPosition },
+            viewDirection: { ...this.viewDirection },
         };
     }
 
     /**
      * Set camera state (for saving/loading)
      */
+    /**
+     * Set camera state (for saving/loading)
+     */
     setState(state) {
-        if (state.spherical) {
-            this.sphericalCoordinates = { ...state.spherical };
+        if (state.cameraPosition) {
+            this.cameraPosition = { ...state.cameraPosition };
         }
-        if (state.target) {
-            this.targetPoint = { ...state.target };
+        if (state.viewDirection) {
+            this.viewDirection = { ...state.viewDirection };
         }
         this.updateCameraPosition();
+    }
+
+    // Compatibility methods for old API
+    /**
+     * Get spherical coordinates (for compatibility with old code)
+     */
+    getSphericalCoordinates() {
+        // Convert current position and view direction to spherical coordinates
+        // This is mainly for UI display purposes
+        const dx = Math.sin(this.viewDirection.yaw) * Math.cos(this.viewDirection.pitch);
+        const dy = Math.sin(this.viewDirection.pitch);
+        const dz = Math.cos(this.viewDirection.yaw) * Math.cos(this.viewDirection.pitch);
+        
+        return {
+            radius: 5000, // dummy value for compatibility
+            theta: this.viewDirection.yaw,
+            phi: Math.PI / 2 - this.viewDirection.pitch, // convert to old phi convention
+        };
+    }
+
+    /**
+     * Get target point (for compatibility with old code)
+     */
+    getTargetPoint() {
+        return { ...this.cameraPosition };
     }
 }
